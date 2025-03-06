@@ -95,3 +95,16 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_trace(void)
+{
+    int mask;
+    struct proc *p = myproc();
+    // 读取参数寄存器 a0 的值
+    if(argint(0, &mask) < 0)
+        return -1;
+    // 写入到进程的 systrace 变量中
+    p->systrace = mask;
+    return 0;
+}

@@ -45,25 +45,25 @@ struct trapframe {
   /*   0 */ uint64 kernel_satp;   // kernel page table
   /*   8 */ uint64 kernel_sp;     // top of process's kernel stack
   /*  16 */ uint64 kernel_trap;   // usertrap()
-  /*  24 */ uint64 epc;           // saved user program counter
+  /*  24 */ uint64 epc;           // auto saved user program counter when call ecall
   /*  32 */ uint64 kernel_hartid; // saved kernel tp
-  /*  40 */ uint64 ra;
-  /*  48 */ uint64 sp;
-  /*  56 */ uint64 gp;
-  /*  64 */ uint64 tp;
-  /*  72 */ uint64 t0;
+  /*  40 */ uint64 ra;            // Return Address
+  /*  48 */ uint64 sp;            // Stack Pointer 指向当前用户栈的顶部，切换至内核态时需保存
+  /*  56 */ uint64 gp;            // Global Pointer
+  /*  64 */ uint64 tp;            // Thread Pointer
+  /*  72 */ uint64 t0;            // Temporary 临时寄存器
   /*  80 */ uint64 t1;
   /*  88 */ uint64 t2;
   /*  96 */ uint64 s0;
   /* 104 */ uint64 s1;
-  /* 112 */ uint64 a0;
+  /* 112 */ uint64 a0;            // Argument Registers 参数寄存器 用于传递函数参数和系统调用参数，a0 常用于系统调用返回值（如 write 写入的字节数）
   /* 120 */ uint64 a1;
   /* 128 */ uint64 a2;
   /* 136 */ uint64 a3;
   /* 144 */ uint64 a4;
   /* 152 */ uint64 a5;
   /* 160 */ uint64 a6;
-  /* 168 */ uint64 a7;
+  /* 168 */ uint64 a7;             // 系统调用号，syscall.h 里面一系列 SYS_xxx 后面跟的数字
   /* 176 */ uint64 s2;
   /* 184 */ uint64 s3;
   /* 192 */ uint64 s4;
@@ -103,4 +103,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  uint64 systrace;             // System call tracing 1 = trace, 0 = no trace
 };
