@@ -6,6 +6,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
 
 uint64
 sys_exit(void)
@@ -108,3 +109,23 @@ sys_trace(void)
     p->systrace = mask;
     return 0;
 }
+
+uint64
+sys_sysinfo(void)
+{
+    uint64 addr;
+
+    // 还是从 a0 寄存器读取用户程序传过来的地址，该地址用于把数据从内核内存复制到用户内存
+    if(argaddr(0, &addr) < 0)
+        return -1;
+
+    struct sysinfo s;
+    s.freemem = kget_avl_mem();
+    s.nproc = cur_proc_cnt();
+
+    // 这里使用了 copyout() 函数，把处于内核内存中的 sysinfo 数据，复制到用户程序的内存中
+    if(copyout(myproc()->pagetable, addr, (char *)&s, sizeof(s)) < 0)
+        return -1;
+    return 0;
+}
+
