@@ -103,4 +103,10 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  int alarm_interval;         // 记录定时器触发间隔（以时钟周期为单位）
+  void (*alarm_handler)();    // 定时器处理函数的函数指针
+  int ticks_count;           // 当前已经过的时钟周期计数器
+  struct trapframe *alarm_trapframe; // 用于保存中断前进程的上下文信息
+  int alarm_on;              // 定时器是否已经在运行了
 };

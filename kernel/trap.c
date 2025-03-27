@@ -77,8 +77,31 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2) {
+    struct proc *p = myproc();
+
+    // 如果设置了定时器
+    if(p->alarm_interval > 0) {
+      p->ticks_count++;
+
+      // 是否达到触发条件：计数达到了设定的间隔 + 处理函数当前未在执行
+      if(p->ticks_count >= p->alarm_interval && !p->alarm_on) {
+        p->ticks_count = 0;
+        p->alarm_on = 1;
+        
+        // 首次调用时分配保存上下文的空间
+        if(p->alarm_trapframe == 0)
+          p->alarm_trapframe = kalloc();
+        // 保存当前进程的完整上下文
+        *p->alarm_trapframe = *p->trapframe;
+        
+        // 修改程序计数器指向处理函数
+        // 当中断返回时会跳转到 handler 函数执行
+        p->trapframe->epc = (uint64)p->alarm_handler;
+      }
+    }
     yield();
+  }
 
   usertrapret();
 }
