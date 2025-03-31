@@ -46,9 +46,22 @@ sys_sbrk(void)
 
   if(argint(0, &n) < 0)
     return -1;
-  addr = myproc()->sz;
-  if(growproc(n) < 0)
-    return -1;
+
+  struct proc* p = myproc();
+
+  addr = p->sz;
+
+  // 原代码调用了 growproc 执行扩容or缩容
+//  if(growproc(n) < 0)
+//    return -1;
+
+  if (n > 0){
+      (p->sz) += n; // 仅增大 size
+  } else {
+      uint sz = p->sz;
+      p->sz = uvmdealloc(p->pagetable, sz, sz + n);
+  }
+
   return addr;
 }
 
