@@ -22,3 +22,7 @@ xv6.out*
 submissions/
 ph
 barrier
+.idea
+.vscode
+gradelib.pyc
+

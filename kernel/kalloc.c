@@ -23,10 +23,19 @@ struct {
   struct run *freelist;
 } kmem;
 
+// 物理地址转 index
+#define PA2IDX(p) (((uint64)(p)) / PGSIZE)
+
+struct {
+  struct spinlock lock; // 保证并发安全
+  int ref_arr[PHYSTOP / PGSIZE]; // 每个物理页面的引用次数
+} page_ref; // 模仿 kmem 新建页面引用结构
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&page_ref.lock, "pageref"); // 初始化 page_ref.lock
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -51,15 +60,23 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
-  // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
+  acquire(&page_ref.lock);
 
-  r = (struct run*)pa;
+  // 只有页面的引用计数为 0，没有进程映射到该物理页了，才真正释放页面
+  if(--page_ref.ref_arr[PA2IDX(pa)] <= 0) {
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+    // Fill with junk to catch dangling refs.
+    memset(pa, 1, PGSIZE);
+
+    r = (struct run*)pa;
+
+    acquire(&kmem.lock);
+    r->next = kmem.freelist;
+    kmem.freelist = r;
+    release(&kmem.lock);
+  }
+
+  release(&page_ref.lock);
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -76,7 +93,46 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r){
     memset((char*)r, 5, PGSIZE); // fill with junk
+    // 如果是新分配的有效物理页，引用计数为 1
+    page_ref.ref_arr[PA2IDX(r)] = 1;
+  }
   return (void*)r;
+}
+
+// 如果有必要，克隆一页物理页
+void *ktry_pgclone(void *pa) {
+
+    acquire(&page_ref.lock);
+
+    // 这个物理页本来就只有一个地方引用，直接返回
+    if(page_ref.ref_arr[PA2IDX(pa)] <= 1) {
+        release(&page_ref.lock);
+        return pa;
+    }
+
+    // 申请一页物理页
+    uint64 newpa = (uint64)kalloc();
+
+    if(newpa == 0) {
+        release(&page_ref.lock);
+        return 0;
+    }
+
+    // 复制老物理页内容到新页
+    memmove((void*)newpa, (void*)pa, PGSIZE);
+
+    // 老物理页引用减一
+    page_ref.ref_arr[PA2IDX(pa)]--;
+
+    release(&page_ref.lock);
+    return (void*)newpa;
+}
+
+// 增加物理页面的引用次数
+void kparef_inc(void *pa) {
+    acquire(&page_ref.lock);
+    page_ref.ref_arr[PA2IDX(pa)]++;
+    release(&page_ref.lock);
 }
