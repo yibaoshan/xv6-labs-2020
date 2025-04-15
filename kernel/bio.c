@@ -56,10 +56,6 @@ bget(uint dev, uint blockno)
   struct buf *b;
   uint bucket_id = hash(blockno);
 
-  uint min_refcnt = 0xffffffff;
-  uint min_timestamp = 0xffffffff;
-  struct buf *least_used_oldest_buf = 0;
-
   // 优先在当前哈希桶中，查找已缓存的块
   acquire(&bcache[bucket_id].lock);
   for(int i = 0; i < NBUFFER; i++) {
@@ -72,15 +68,11 @@ bget(uint dev, uint blockno)
       acquiresleep(&b->lock);
       return b;
     }
-
-    //【自己的桶里面】更新 最少使用且最久未使用的块
-    if(b->refcnt <= min_refcnt && b->timestamp < min_timestamp) {
-        min_refcnt = b->refcnt;
-        min_timestamp = b->timestamp;
-        least_used_oldest_buf = b;
-    }
   }
   release(&bcache[bucket_id].lock);
+
+  uint min_timestamp = 0xffffffff;
+  struct buf *least_used_buf = 0;
 
   // 没有找到缓存块，和上一小节的 kalloc 一样，环形遍历所有桶，查找其他桶中未使用的空闲块
   // 遍历所有桶的过程中，记录最少使用并且最久未使用的块
@@ -104,28 +96,27 @@ bget(uint dev, uint blockno)
         return b;
       }
 
-      //【其他桶里面】更新 最少使用且最久未使用的块
-      if(b->refcnt <= min_refcnt && b->timestamp < min_timestamp) {
-        min_refcnt = b->refcnt;
+      //更新 最久未使用的 buffer
+      if(b->timestamp < min_timestamp) {
         min_timestamp = b->timestamp;
-        least_used_oldest_buf = b;
+        least_used_buf = b;
       }
     }
     release(&bcache[cur_bucket].lock);
   }
 
-  // 其他桶里面也没有空闲块，那就只能
-  if(least_used_oldest_buf) {
+  // 其他桶里面也没有空闲块，那就只能使用 最久未使用的 buffer
+  if(least_used_buf) {
     acquire(&bcache[bucket_id].lock);
     // 一大堆赋值和初始化操作
-    least_used_oldest_buf->dev = dev;
-    least_used_oldest_buf->blockno = blockno;
-    least_used_oldest_buf->valid = 0;
-    least_used_oldest_buf->refcnt = 1;
-    update_timestamp(least_used_oldest_buf);
+    least_used_buf->dev = dev;
+    least_used_buf->blockno = blockno;
+    least_used_buf->valid = 0;
+    least_used_buf->refcnt = 1;
+    update_timestamp(least_used_buf);
     release(&bcache[bucket_id].lock);
-    acquiresleep(&least_used_oldest_buf->lock);
-    return least_used_oldest_buf;
+    acquiresleep(&least_used_buf->lock);
+    return least_used_buf;
   }
 
   panic("bget: no buffers");
