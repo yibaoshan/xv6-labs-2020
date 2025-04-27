@@ -484,3 +484,123 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+    uint64 addr;
+    int len, prot, flags, fd, offset;
+    struct file* file;
+    struct vma* vma = 0;
+
+    // 获取 mmap 系统调用的入参，并检查是否合法
+    if(argaddr(0, &addr)<0 || argint(1, &len)<0
+       || argint(2, &prot)<0 || argint(3, &flags)<0
+       || argfd(4, &fd, &file)<0 || argint(5, &offset)<0)
+        return -1;
+
+    // 一些参数合法性校验
+    if(len <= 0)
+      return -1;        
+    if((prot & (PROT_READ|PROT_WRITE|PROT_EXEC)) == 0) // only PROT_READ, PROT_WRITE, PROT_EXEC
+        return -1;
+    if((prot & PROT_WRITE) && !file->writable && flags==MAP_SHARED) // MAP_SHARED 时，文件必须可写
+        return -1;
+    if((prot & PROT_READ) && !file->readable) // 同理，MAP_PRIVATE 时，文件必须可读，否则返回错误
+        return -1;
+
+    struct proc* p = myproc();
+    len = PGROUNDUP(len);
+
+    if(p->sz+len > MAXVA)
+        return -1;
+
+    if(offset<0 || offset%PGSIZE)
+        return -1;
+
+    // 查找一个空闲的 vma 区域    
+    for(int i=0; i<NVMA; i++) {
+        if(p->vmas[i].addr)
+            continue;
+        vma = &p->vmas[i];
+        break;
+    }
+
+    // vma 全部被占用，没有空闲，返回🔙
+    if(!vma)
+        return -1;
+
+    if(addr == 0)
+        vma->addr = p->sz; // 用户未指定地址，则使用进程当前大小作为起始地址
+    else
+        vma->addr = addr; // 用户指定了地址
+
+    // 一些赋值操作
+    vma->length = len;
+    vma->prot = prot;
+    vma->flags = flags;
+    vma->offset = offset;
+    vma->file = file;
+    p->sz += len;
+    
+    // 文件引用 +1
+    filedup(file);
+
+    return vma->addr;
+}
+
+uint64
+sys_munmap(void)
+{
+    uint64 addr;
+    int len;
+    struct vma* vma = 0;
+    struct proc* p = myproc();
+
+    if(argaddr(0, &addr)<0 || argint(1, &len)<0)
+        return -1;
+
+    // 参数检查
+    if(len <= 0 || addr + len > p->sz)
+        return -1;
+
+    addr = PGROUNDDOWN(addr);
+    len = PGROUNDUP(len);
+
+    // 查找 addr 对应的 VMA
+    for(int i=0; i<NVMA; i++) {
+        if(p->vmas[i].addr && addr>=p->vmas[i].addr
+           && addr+len<=p->vmas[i].addr+p->vmas[i].length) {
+            vma = &p->vmas[i];
+            break;
+        }
+    }
+
+    // addr 不合法，返回
+    if(!vma || addr != vma->addr)
+        return -1;
+
+    // 如果是共享映射，需要在接触映射的时候写回文件！
+    if(vma->flags & MAP_SHARED)
+        filewrite(vma->file, addr, len);
+
+    // 解除页表映射
+    uvmunmap(p->pagetable, addr, len/PGSIZE, 1);
+
+    // 更新 VMA 信息
+    if(len == vma->length) {
+        // 完全解除映射，则释放 VMA
+        fileclose(vma->file);
+        memset(vma, 0, sizeof(*vma));
+    } else {
+        // 部分解除映射，更新地址和长度
+        vma->addr += len;
+        vma->length -= len;
+    }
+
+    // 解除映射的是进程地址空间的末尾，调整当前进程大小
+    if(addr + len == p->sz)
+        p->sz -= len;
+
+    return 0;
+}

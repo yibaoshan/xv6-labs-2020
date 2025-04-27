@@ -302,6 +302,16 @@ fork(void)
 
   np->state = RUNNABLE;
 
+  // 复制父进程的VMA
+  for(int i = 0; i < 16; i++) { // length>0 表示该 VMA 正在使用
+    if(p->vmas[i].length > 0) {
+      // 复制爸爸的 vma
+      memmove(&np->vmas[i], &p->vmas[i], sizeof(struct vma));
+      if(p->vmas[i].file) // 调用 mmap 传进来的 fd ，要映射的文件
+        filedup(p->vmas[i].file); // 文件引用次数加一，因为现在子进程也在使用这个文件
+    }
+  }
+
   release(&np->lock);
 
   return pid;
@@ -350,6 +360,17 @@ exit(int status)
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+  }
+
+  // 清理所有的 VMA
+  for(int i = 0; i < 16; i++) {
+    if(p->vmas[i].length > 0) { // 同样只处理被使用的 vma
+      // 解除映射
+      uvmunmap(p->pagetable, p->vmas[i].addr, p->vmas[i].length/PGSIZE, 1);
+      if(p->vmas[i].file) // 如果有映射的文件，需要关闭
+        fileclose(p->vmas[i].file);
+      p->vmas[i].length = 0; // 清空 length，表示未使用
     }
   }
 

@@ -3,7 +3,11 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "spinlock.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
 #include "proc.h"
+#include "fcntl.h"
 #include "defs.h"
 
 struct spinlock tickslock;
@@ -67,6 +71,69 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause()==13 || r_scause()==15) { // 处理缺页异常，这里是程序首次访问映射的区域出错了，需要为该 va 分配物理内存
+    // 读取需要处理错误的 va，参考页表实验
+    uint64 va = r_stval();                    
+    struct vma* vma = 0;                      
+    char* mem = 0;                           
+    int success = 0;                       
+    
+    // 对齐 va
+    va = PGROUNDDOWN(va);
+    
+    // 验证地址合法性（必须在用户栈顶和进程大小之间）
+    if(va < p->sz && va > p->trapframe->sp) {
+        // 查找当前 va 在是哪个 vma 中
+        for(int i=0; i<NVMA; i++) {
+            if(va>=p->vmas[i].addr && va<p->vmas[i].addr+p->vmas[i].length) {
+                vma = &p->vmas[i];
+                break;
+            }
+        }
+        
+        // 找到 va 对应的 vma
+        if(vma) {
+            // 尝试为 va 分配物理内存
+            mem = kalloc();
+            if(mem) { // 分配成功
+                memset(mem, 0, PGSIZE);  // 清零新分配的内存
+                
+                // 把要映射的文件的数据读出来，然后写入刚申请的内存中 mem
+                uint offset = va - vma->addr + vma->offset;  // 计算文件偏移量，确定要读取的位置
+                ilock(vma->file->ip);
+                int bytes_read = readi(vma->file->ip, 0, (uint64)mem, offset, PGSIZE);
+                iunlock(vma->file->ip);
+                
+                if(bytes_read >= 0) {
+                    // 更新页表项 pte 的权限
+                    int flags = PTE_U;  // 基本权限，用户可访问
+                    // 根据 prot 字段设置 pte 的权限
+                    if(vma->prot & PROT_READ)
+                        flags |= PTE_R;  // 可读
+                    if(vma->prot & PROT_WRITE)
+                        flags |= PTE_W;  // 可写
+                    if(vma->prot & PROT_EXEC)
+                        flags |= PTE_X;  // 可执行
+                    
+                    // 如果是共享映射，确保内存的修改可以被写回到文件中
+                    if(vma->flags & MAP_SHARED)
+                        flags |= PTE_R;
+                    
+                    // 为 va 建立页表映射
+                    if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, flags) == 0) {
+                        success = 1;  // 查找 vma、分配内存、建立页表映射这几步全部都成功了
+                    }
+                }
+            }
+        }
+    }
+    
+    // 没成功的话，如果已经分配过内存，释放掉
+    if(!success) {
+        if(mem)
+            kfree(mem);  // 释放已分配的内存
+        p->killed = 1;   // 终止进程
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
